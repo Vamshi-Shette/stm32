@@ -1,0 +1,12 @@
+../Core/Src/main.c:36:19:SPI_ReadSector_IT	24	static
+../Core/Src/main.c:54:19:SPI_WriteSector_IT	24	static
+../Core/Src/main.c:71:9:SPI_SendByte_IT	16	static
+../Core/Src/main.c:86:6:SD_SendDummyClocks	16	static
+../Core/Src/main.c:96:5:__io_putchar	16	static
+../Core/Src/main.c:102:6:HAL_SPI_TxRxCpltCallback	16	static
+../Core/Src/main.c:112:5:main	8	static
+../Core/Src/main.c:207:6:SystemClock_Config	96	static
+../Core/Src/main.c:249:13:MX_SPI1_Init	8	static
+../Core/Src/main.c:272:13:MX_USART2_UART_Init	8	static
+../Core/Src/main.c:291:13:MX_GPIO_Init	48	static
+../Core/Src/main.c:315:6:Error_Handler	4	static,ignoring_inline_asm

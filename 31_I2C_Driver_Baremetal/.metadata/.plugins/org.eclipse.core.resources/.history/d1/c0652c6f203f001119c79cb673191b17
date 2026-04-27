@@ -1,0 +1,81 @@
+/*
+ * 013_uart.c
+ */
+
+#include "stm32f407xx.h"
+#include <string.h>
+
+USART_Handle_t usart2_handle;
+
+void USART2_GPIOInit(void)
+{
+	GPIO_Handle_t usart_gpios;
+
+	usart_gpios.pGPIOx = GPIOA;
+	usart_gpios.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_ALTFN;
+	usart_gpios.GPIO_PinConfig.GPIO_PinAltFunMode = 7; // AF7 for USART2
+	usart_gpios.GPIO_PinConfig.GPIO_PinOPType = GPIO_OP_TYPE_PP;
+	usart_gpios.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_PIN_PU;
+	usart_gpios.GPIO_PinConfig.GPIO_PinSpeed = GPIO_SPEED_FAST;
+
+	// TX -> PA2
+	usart_gpios.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_2;
+	GPIO_Init(&usart_gpios);
+
+	// RX -> PA3
+	usart_gpios.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_3;
+	GPIO_Init(&usart_gpios);
+}
+
+USART_Handle_t usart2_handle;
+
+int main(void)
+{
+	char tx_data = 'a'; //;
+	char rx_data;
+
+	// 1. Init GPIO
+	USART2_GPIOInit();
+
+	// 2. USART Config
+	usart2_handle.pUSARTx = USART2;
+	usart2_handle.USART_Config.USART_Baud = USART_STD_BAUD_115200;
+	usart2_handle.USART_Config.USART_HWFlowControl = USART_HW_FLOW_CTRL_NONE;
+	usart2_handle.USART_Config.USART_Mode = USART_MODE_TXRX;
+	usart2_handle.USART_Config.USART_NoOfStopBits = USART_STOPBITS_1;
+	usart2_handle.USART_Config.USART_WordLength = USART_WORDLEN_8BITS;
+	usart2_handle.USART_Config.USART_ParityControl = USART_PARITY_DISABLE;
+
+	// 3. Init USART
+	USART_Init(&usart2_handle);
+
+	// 4. Enable USART peripheral
+	USART_PeripheralControl(USART2, ENABLE);
+
+	// 🔥 Flush garbage data after enabling USART
+	volatile uint32_t temp;
+	temp = USART2->SR;
+	temp = USART2->DR;
+	(void)temp;
+
+
+	while(1)
+	{
+
+
+
+		// 5. Send data
+		USART_SendData(&usart2_handle,&(uint8_t*)tx_data , 1));
+
+		for(int i=0;i<50000/2;i++);
+
+		// 6. Receive same data (loopback)
+		USART_ReceiveData(&usart2_handle, &(uint8_t*)rx_data, 1);
+
+		// Now rx_data should contain same as tx_data
+		//strlen(tx_data)
+	}
+}
+
+
+

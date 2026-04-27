@@ -1,0 +1,10 @@
+/*
+ * 004spi_tx_testing.c
+ */
+
+int main()
+{
+	return 0;
+}
+
+

@@ -1,0 +1,165 @@
+/*
+ * main.c  –  OPT3001 lux reading example
+ *            Target : STM32F407 Discovery / Nucleo
+ *            I2C    : I2C1  (PB6 = SCL, PB7 = SDA, both open-drain + pull-ups)
+ *            Sensor : OPT3001 with ADDR pin tied to GND  (7-bit addr = 0x44)
+ */
+#include <stdio.h>
+#include "stm32f407xx.h"
+#include "opt3001.h"
+
+/* ─── Forward declarations ─── */
+static void I2C1_GPIOInits(void);
+static void I2C1_Inits(I2C_Handle_t *pI2CHandle);
+static void delay_ms(uint32_t ms);
+void I2C_PeripheralControl(I2C_RegDef_t *pI2Cx, uint8_t EnorDi);
+
+
+/* ─── Global handles ─── */
+static I2C_Handle_t  g_i2c1Handle;
+static OPT3001_Handle g_opt3001;
+
+/* ─── Application result variables ─── */
+volatile float          g_lux       = 0.0f;   /* Latest lux reading              */
+volatile OPT3001_Status g_status    = OPT3001_OK;
+volatile uint32_t       g_readCount = 0;       /* Number of successful reads      */
+
+
+int main(void)
+{
+    /* ── 1. Configure I2C1 GPIO pins (PB6 = SCL, PB7 = SDA) ── */
+    I2C1_GPIOInits();
+
+    /* ── 2. Initialise I2C1 peripheral ── */
+    I2C1_Inits(&g_i2c1Handle);
+
+    /*
+     * ── 3. Initialise peripheral THEN enable PE ──────────────────────────
+     * BUG FIX #1 (order): PE must be 0 while I2C_Init() programs CR1/CR2/
+     * CCR/TRISE (RM0090 §27.3.3).  I2C_Init() does a full CR1 write that
+     * clears PE anyway, so enabling it first achieves nothing and leaves the
+     * peripheral unconfigured — causing the infinite wait on SB flag.
+     */
+    I2C_Init(&g_i2c1Handle);
+   // I2C_PeripheralControl(g_i2c1Handle.pI2Cx, ENABLE);
+
+    /* ── 4. Bind the OPT3001 handle to I2C1 ── */
+    g_opt3001.hi2c   = &g_i2c1Handle;
+    /*
+     * BUG FIX #2 (address): ADDR pin is wired to GND → use 0x44.
+     * OPT3001_I2C_ADDR_SDA (0x46) was wrong → every transaction got a NACK
+     * → infinite wait on ADDR flag.
+     * Change this to match YOUR board wiring (GND=0x44, VCC=0x45, SDA=0x46, SCL=0x47).
+     */
+    g_opt3001.addr   = OPT3001_I2C_ADDR_SCL;
+    g_opt3001.config = 0;
+
+    /* ── 5. Verify device ID and apply default config ──
+     *    OPT3001_CFG_DEFAULT = Auto-range | 800 ms CT | Continuous mode       */
+    g_status = OPT3001_Init(&g_opt3001, OPT3001_CFG_DEFAULT);
+
+    if (g_status != OPT3001_OK)
+    {
+        /* Sensor not found or I2C error — halt here for debugging.
+         * In production you would log the error and handle gracefully. */
+    	printf("Sensor Not found..\n");
+        while (1);
+    }
+
+    /* ── 6. Wait one full conversion cycle before the first read ──
+     *    800 ms conversion time + small margin                               */
+    delay_ms(900);
+    printf("Sensor Initialized...\n");
+    printf("............Readings........\n");
+    /* ── 7. Main polling loop ── */
+    while (1)
+    {
+        float lux = 0.0f;
+        g_status = OPT3001_ReadLux(&g_opt3001, &lux);
+
+        if (g_status == OPT3001_OK)
+        {
+            g_lux = lux;       /* Consume / display this value as needed */
+            g_readCount++;
+            printf("Sensor Data: %0.2f\n",lux);
+        }
+
+        /*
+         * ── Your display / logging / UART code goes here ──
+         * e.g.  UART_SendFloat(lux);
+         *       LCD_PrintFloat(lux);
+         *       log_entry(g_readCount, lux);
+         */
+
+        /* Wait ~1 s between readings in continuous mode */
+        delay_ms(500);
+    }
+
+    /* Never reached */
+    return 0;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Helper: configure PB6 (SCL) and PB7 (SDA) as I2C1 alternate function pins
+ * ════════════════════════════════════════════════════════════════════════════
+ *  AF4 = I2C1/2/3 on STM32F407 (see datasheet Table 9)
+ *  Open-drain output type + pull-up are mandatory for I2C.
+ */
+static void I2C1_GPIOInits(void)
+{
+    GPIO_Handle_t i2cPins;
+
+    i2cPins.pGPIOx = GPIOB;
+
+    i2cPins.GPIO_PinConfig.GPIO_PinMode       = GPIO_MODE_ALTFN;
+    i2cPins.GPIO_PinConfig.GPIO_PinOType      = GPIO_OP_TYPE_OD;   /* Open-drain */
+    i2cPins.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_PIN_PU;      /* Pull-up    */
+    i2cPins.GPIO_PinConfig.GPIO_PinAltFunMode = 4;                 /* AF4 = I2C  */
+    i2cPins.GPIO_PinConfig.GPIO_PinSpeed      = GPIO_SPEED_FAST;
+
+    /* SCL — PB6 */
+    i2cPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_6;
+    GPIO_Init(&i2cPins);
+
+    /* SDA — PB7 */
+    i2cPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_7;
+    GPIO_Init(&i2cPins);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Helper: initialise I2C1 at 100 kHz (standard mode)
+ * ════════════════════════════════════════════════════════════════════════════ */
+static void I2C1_Inits(I2C_Handle_t *pI2CHandle)
+{
+    pI2CHandle->pI2Cx = I2C1;
+
+    pI2CHandle->I2C_Config.I2C_SCLSpeed     = I2C_SCL_SPEED_SM;   /* 100 kHz  */
+    pI2CHandle->I2C_Config.I2C_DeviceAddress = 0x61;               /* STM32 own address (arbitrary, unused in master-only) */
+    pI2CHandle->I2C_Config.I2C_ACKControl    = I2C_ACK_ENABLE;
+    pI2CHandle->I2C_Config.I2C_FMDutyCycle   = I2C_FM_DUTY_2;     /* Irrelevant at SM speed */
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Helper: simple software busy-wait delay
+ *  Calibrated for ~16 MHz HSI (adjust the loop count for your clock).
+ *  Replace with SysTick-based delay in production code.
+ * ════════════════════════════════════════════════════════════════════════════ */
+static void delay_ms(uint32_t ms)
+{
+    /* ~8000 iterations ≈ 1 ms at 16 MHz HSI with -O0 */
+    volatile uint32_t count = ms * 8000U;
+    while (count--)
+    {
+        __asm("NOP");
+    }
+}
+
+
+
+
+
+
+
+
+

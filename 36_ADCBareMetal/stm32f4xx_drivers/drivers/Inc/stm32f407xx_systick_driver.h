@@ -1,0 +1,14 @@
+/*
+ * stm32f407xx_systick_driver.h
+ */
+
+#ifndef INC_STM32F407XX_SYSTICK_DRIVER_H_
+#define INC_STM32F407XX_SYSTICK_DRIVER_H_
+
+#include "stm32f407xx.h"
+
+void SysTick_Init(uint32_t ticks);
+void SysTick_DelayMs(uint32_t ms);
+void SysTick_DelayUs(uint32_t us);
+
+#endif /* INC_STM32F407XX_SYSTICK_DRIVER_H_ */

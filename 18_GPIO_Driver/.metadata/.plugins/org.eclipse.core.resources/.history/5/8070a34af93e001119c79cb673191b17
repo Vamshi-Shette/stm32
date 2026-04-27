@@ -1,0 +1,203 @@
+/*
+ * 006loopback_testing.c
+ */
+#include <string.h>
+#include "stm32f407xx.h"
+
+SPI_Handle_t SPI2Handle;
+
+//uint8_t tx_buffer[] = "HELLO SPI LOOPBACK";
+//uint8_t rx_buffer[sizeof(tx_buffer)];
+
+uint8_t SD_SPI_TxRx(uint8_t data)
+{
+    uint8_t rx;
+    SPI_TransmitReceive(SPI2, &data, &rx, 1);
+    return rx;
+}
+
+#define SD_CS_LOW()   GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, 0)
+#define SD_CS_HIGH()  GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, 1)
+
+void SD_SendClockTrain(void)
+{
+    uint8_t dummy = 0xFF;
+
+    SD_CS_HIGH();
+    for(int i = 0; i < 10; i++)   // 80 clocks
+        SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+}
+
+uint8_t SD_SendCommand(uint8_t cmd, uint32_t arg, uint8_t crc)
+{
+    uint8_t res;
+    uint8_t frame[6];
+
+    frame[0] = cmd | 0x40;
+    frame[1] = (arg >> 24);
+    frame[2] = (arg >> 16);
+    frame[3] = (arg >> 8);
+    frame[4] = (arg);
+    frame[5] = crc;
+
+    SD_CS_LOW();
+
+    // Send command frame
+    for(int i = 0; i < 6; i++)
+        SD_SPI_TxRx(frame[i]);
+
+    // Wait for response
+    for(int i = 0; i < 10; i++)
+    {
+        res = SD_SPI_TxRx(0xFF);
+        if(!(res & 0x80))
+            return res;
+    }
+
+    return 0xFF;
+}
+
+uint8_t SD_Init(void)
+{
+    uint8_t res;
+
+    SD_SendClockTrain();
+
+    // CMD0
+    res = SD_SendCommand(0, 0, 0x95);
+    if(res != 0x01) return 1;
+
+    // CMD8
+    res = SD_SendCommand(8, 0x1AA, 0x87);
+    if(res != 0x01) return 2;
+
+    // Skip R7 response
+    for(int i=0;i<4;i++) SD_SPI_TxRx(0xFF);
+
+    // ACMD41
+    do {
+        SD_SendCommand(55, 0, 0x01);
+        res = SD_SendCommand(41, 0x40000000, 0x01);
+    } while(res != 0x00);
+
+    SD_CS_HIGH();
+    SD_SPI_TxRx(0xFF);
+
+    return 0;
+}
+
+uint8_t SD_WriteBlock(uint32_t blockAddr, uint8_t *data)
+{
+    uint8_t res;
+
+    res = SD_SendCommand(24, blockAddr, 0x01);
+    if(res != 0x00) return 1;
+
+    SD_SPI_TxRx(0xFE); // start token
+
+    for(int i = 0; i < 512; i++)
+        SD_SPI_TxRx(data[i]);
+
+    // CRC
+    SD_SPI_TxRx(0xFF);
+    SD_SPI_TxRx(0xFF);
+
+    res = SD_SPI_TxRx(0xFF);
+    if((res & 0x1F) != 0x05) return 2;
+
+    while(SD_SPI_TxRx(0xFF) == 0); // wait busy
+
+    SD_CS_HIGH();
+    SD_SPI_TxRx(0xFF);
+
+    return 0;
+}
+
+uint8_t SD_ReadBlock(uint32_t blockAddr, uint8_t *buffer)
+{
+    uint8_t token;
+
+    SD_SendCommand(17, blockAddr, 0x01);
+
+    while((token = SD_SPI_TxRx(0xFF)) == 0xFF);
+
+    if(token != 0xFE) return 1;
+
+    for(int i = 0; i < 512; i++)
+        buffer[i] = SD_SPI_TxRx(0xFF);
+
+    // ignore CRC
+    SD_SPI_TxRx(0xFF);
+    SD_SPI_TxRx(0xFF);
+
+    SD_CS_HIGH();
+    SD_SPI_TxRx(0xFF);
+
+    return 0;
+}
+
+void SPI2_GPIOInit(void)
+{
+    GPIO_Handle_t SPIPins;
+
+    SPIPins.pGPIOx = GPIOB;
+    SPIPins.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_ALTFN;
+    SPIPins.GPIO_PinConfig.GPIO_PinAltFunMode = 5;
+    SPIPins.GPIO_PinConfig.GPIO_PinOPType = GPIO_OP_TYPE_PP;
+    SPIPins.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_NO_PUPD;
+    SPIPins.GPIO_PinConfig.GPIO_PinSpeed = GPIO_SPEED_FAST;
+
+    // SCK
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_13;
+    GPIO_Init(&SPIPins);
+
+    // MISO
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_14;
+    GPIO_Init(&SPIPins);
+
+    // MOSI
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_15;
+    GPIO_Init(&SPIPins);
+
+    // CS pin
+    SPIPins.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_OUT;
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_12;
+    GPIO_Init(&SPIPins);
+
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, 1); // CS HIGH
+}
+
+void SPI2_Init(void)
+{
+    SPI2Handle.pSPIx = SPI2;
+
+    SPI2Handle.SPIConfig.SPI_DeviceMode = SPI_DEVICE_MODE_MASTER;
+    SPI2Handle.SPIConfig.SPI_BusConfig = SPI_BUS_CONFIG_FD;
+    SPI2Handle.SPIConfig.SPI_SclkSpeed = SPI_SCLK_SPEED_DIV32;
+    SPI2Handle.SPIConfig.SPI_DFF = SPI_DFF_8BITS;
+    SPI2Handle.SPIConfig.SPI_CPOL = SPI_CPOL_LOW;
+    SPI2Handle.SPIConfig.SPI_CPHA = SPI_CPHA_LOW;
+    SPI2Handle.SPIConfig.SPI_SSM = SPI_SSM_EN;
+
+    SPI_Init(&SPI2Handle);
+
+    SPI_SSIConfig(SPI2, ENABLE);
+    SPI_PeripheralControl(SPI2, ENABLE);
+}
+
+uint8_t tx_block[512] = "STM32 SD RAW TEST USING SPI";
+uint8_t rx_block[512];
+
+int main(void)
+{
+    SPI2_GPIOInit();
+    SPI2_Init();
+
+    if(SD_Init() != 0)
+        while(1); // fail
+
+    SD_WriteBlock(100, tx_block);   // write to sector 100
+    SD_ReadBlock(100, rx_block);    // read back
+
+    while(1);
+}

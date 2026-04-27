@@ -1,0 +1,5 @@
+../drivers/Src/stm32f407xx_adc_driver.c:8:6:ADC_PeriClockControl	16	static
+../drivers/Src/stm32f407xx_adc_driver.c:25:6:ADC_Init	24	static
+../drivers/Src/stm32f407xx_adc_driver.c:59:6:ADC_PeripheralControl	16	static
+../drivers/Src/stm32f407xx_adc_driver.c:68:6:ADC_StartConversion	16	static
+../drivers/Src/stm32f407xx_adc_driver.c:74:10:ADC_Read	16	static

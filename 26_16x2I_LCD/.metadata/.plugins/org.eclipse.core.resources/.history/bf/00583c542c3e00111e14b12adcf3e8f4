@@ -1,0 +1,289 @@
+/*
+ * 009sdcard.c
+ */
+
+#include "stm32f407xx.h"
+#include <string.h>
+/*
+* AF5 -- SPI2
+* PB14 -- MISO
+* PB15 -- MOSI
+* PB13 -- SCLK
+* PB12 --- NSS
+*/
+
+void delay(void)
+{
+	for(uint32_t i = 0;i < 500000;i++);
+}
+
+void SPI2_GPIOInits(void)
+{
+	GPIO_Handle_t SPIPins,NSSpin;
+
+	SPIPins.pGPIOx = GPIOB;
+	SPIPins.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_ALTFN;
+	SPIPins.GPIO_PinConfig.GPIO_PinAltFunMode = 5;
+	SPIPins.GPIO_PinConfig.GPIO_PinOPtype = GPIO_OP_TYPE_PP;
+	SPIPins.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_NO_PUPD;
+	SPIPins.GPIO_PinConfig.GPIO_PinSpeed = GPIO_SPEED_FAST;
+
+	// SCLK
+	SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_13;
+	GPIO_Init(&SPIPins);
+
+	// MOSI
+	SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_15;
+	GPIO_Init(&SPIPins);
+
+	// MISO
+	SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_14;
+	SPIPins.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_PIN_PU;
+	GPIO_Init(&SPIPins);
+
+	// NSS
+	NSSpin.pGPIOx = GPIOB;
+	NSSpin.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_OUT;
+	NSSpin.GPIO_PinConfig.GPIO_PinOPtype = GPIO_OP_TYPE_PP;
+	NSSpin.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_NO_PUPD;
+	NSSpin.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_12;
+	NSSpin.GPIO_PinConfig.GPIO_PinSpeed = GPIO_SPEED_FAST;
+	GPIO_Init(&NSSpin);
+	GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+
+}
+
+void SPI2_Init(void)
+{
+	SPI_Handle_t SPI2handle;
+
+	SPI2handle.pSPIx = SPI2;
+	SPI2handle.SPIConfig.SPI_BusConfig = SPI_BUS_CONFIG_FD;
+	SPI2handle.SPIConfig.SPI_DeviceMode = SPI_DEVICE_MODE_MASTER;
+	SPI2handle.SPIConfig.SPI_SclkSpeed = SPI_SCLK_SPEED_DIV256;
+	SPI2handle.SPIConfig.SPI_DFF = SPI_DFF_8BITS;
+	SPI2handle.SPIConfig.SPI_CPOL = SPI_CPOL_LOW;
+	SPI2handle.SPIConfig.SPI_CPHA = SPI_CPHA_LOW;
+	SPI2handle.SPIConfig.SPI_SSM = SPI_SSM_EN; //software slave management
+
+	SPI_Init(&SPI2handle);
+}
+
+void GPIO_BtnInit()
+{
+	GPIO_Handle_t GPIOBtn;
+
+	GPIOBtn.pGPIOx = GPIOA;
+	GPIOBtn.GPIO_PinConfig.GPIO_PinNumber       = GPIO_PIN_NO_0;
+	GPIOBtn.GPIO_PinConfig.GPIO_PinMode         = GPIO_MODE_IN;
+	GPIOBtn.GPIO_PinConfig.GPIO_PinSpeed        = GPIO_SPEED_FAST;
+	GPIOBtn.GPIO_PinConfig.GPIO_PinPuPdControl  = GPIO_NO_PUPD;
+
+	GPIO_Init(&GPIOBtn);
+}
+
+uint8_t SD_SendCommand_Read(uint8_t cmd, uint32_t arg, uint8_t crc, uint8_t *resp_data, uint8_t len)
+{
+    uint8_t frame[6];
+    uint8_t response;
+    uint8_t dummy = 0xFF;
+
+    frame[0] = cmd | 0x40;
+    frame[1] = (arg >> 24) & 0xFF;
+    frame[2] = (arg >> 16) & 0xFF;
+    frame[3] = (arg >> 8)  & 0xFF;
+    frame[4] = (arg)       & 0xFF;
+    frame[5] = crc;
+
+    // CS LOW
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, RESET);
+
+    // dummy
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    // send command
+    for(int i = 0; i < 6; i++)
+    {
+        SPI_TransmitReceive(SPI2, &frame[i], &dummy, 1);
+    }
+
+    // wait for response
+    for(int i = 0; i < 10; i++)
+    {
+        SPI_TransmitReceive(SPI2, &dummy, &response, 1);
+        if((response & 0x80) == 0)
+            break;
+    }
+
+    // read additional response bytes (IMPORTANT)
+    for(int i = 0; i < len; i++)
+    {
+        if(resp_data != NULL)
+            SPI_TransmitReceive(SPI2, &dummy, &resp_data[i], 1);
+        else
+            SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+    }
+
+    return response;
+}
+
+uint8_t SD_WriteBlock(uint32_t block_num, uint8_t *buffer)
+{
+    uint8_t dummy = 0xFF;
+    uint8_t token = 0xFE;
+    uint8_t resp;
+
+    resp = SD_SendCommand_Read(24, block_num, 0xFF, NULL, 0);
+    if(resp != 0x00) return resp;
+
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, RESET);
+
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    SPI_TransmitReceive(SPI2, &token, &dummy, 1);
+
+    for(int i = 0; i < 512; i++)
+        SPI_TransmitReceive(SPI2, &buffer[i], &dummy, 1);
+
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    uint8_t data_resp;
+    SPI_TransmitReceive(SPI2, &dummy, &data_resp, 1);
+
+    if((data_resp & 0x1F) != 0x05)
+        return data_resp;
+
+    // WAIT FOR CARD NOT BUSY (IMPORTANT FIX)
+    uint8_t busy;
+    do {
+        SPI_TransmitReceive(SPI2, &dummy, &busy, 1);
+    } while(busy != 0xFF);
+
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    return 0;
+}
+
+uint8_t SD_ReadBlock(uint32_t block_num, uint8_t *buffer)
+{
+    uint8_t dummy = 0xFF;
+    uint8_t token;
+    uint8_t resp;
+
+    resp = SD_SendCommand_Read(17, block_num, 0xFF, NULL, 0);
+    if(resp != 0x00) return resp;
+
+    // wait for token
+    do {
+        SPI_TransmitReceive(SPI2, &dummy, &token, 1);
+    } while(token == 0xFF);
+
+    if(token != 0xFE) return token;
+
+    // read data
+    for(int i = 0; i < 512; i++)
+    {
+        SPI_TransmitReceive(SPI2, &dummy, &buffer[i], 1);
+    }
+
+    // skip CRC
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    // release CS
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    return 0;
+}
+
+char user_data[] = "Hello world";
+char read_buffer[32]; // Buffer to store received data
+
+int main()
+{
+    SPI2_GPIOInits();
+    SPI2_Init();
+
+    // software slave management
+    SPI_SSIConfig(SPI2, ENABLE);
+    SPI_SSOEConfig(SPI2, DISABLE);
+
+    // enable SPI
+    SPI_PeripheralControl(SPI2, ENABLE);
+
+    delay();
+
+    uint8_t dummy = 0xFF;
+
+    // CS HIGH
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+
+    // give at least 74 clock cycles
+    for(int i = 0; i < 20; i++)
+    {
+        SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+    }
+
+    uint8_t resp;
+    int retry = 0;
+
+    do {
+    	resp = SD_SendCommand_Read(0, 0x00000000, 0x95, NULL, 0);
+
+        GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+        SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+        retry++;
+
+    } while(resp != 0x01 && retry < 10);
+
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);  // CS HIGH
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);       // extra clock
+
+    uint8_t r7[4];
+
+    resp = SD_SendCommand_Read(8, 0x000001AA, 0x87, r7, 4);
+
+    // NOW release CS
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    do {
+        // CMD55
+        resp = SD_SendCommand_Read(55, 0, 0xFF, NULL, 0);
+
+        GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+        SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+        // ACMD41 (HCS bit set)
+        resp = SD_SendCommand_Read(41, 0x40000000, 0xFF, NULL, 0);
+
+        GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+        SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    } while(resp != 0x00);
+
+    uint8_t ocr[4];
+
+    resp = SD_SendCommand_Read(58, 0, 0xFF, ocr, 4);
+
+    GPIO_WriteToOutputPin(GPIOB, GPIO_PIN_NO_12, SET);
+    SPI_TransmitReceive(SPI2, &dummy, &dummy, 1);
+
+    uint8_t data[512] = "Hello SD Card from STM32";
+
+    uint8_t status = SD_WriteBlock(0, data);
+
+    uint8_t rbuf[512];
+
+    SD_ReadBlock(0, rbuf);
+    while(1)
+    {
+
+    }
+}
+
+

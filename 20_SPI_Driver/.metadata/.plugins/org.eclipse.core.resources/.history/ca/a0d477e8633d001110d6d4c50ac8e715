@@ -1,0 +1,96 @@
+/*
+ * 006loopback_testing.c
+ */
+#include <string.h>
+#include "stm32f407xx.h"
+
+/*
+ * PA5 -> SCK
+ * PA6 -> MISO
+ * PA7 -> MOSI
+ */
+
+void SPI1_GPIOInits(void)
+{
+    GPIO_Handle_t SPIPins;
+
+    SPIPins.pGPIOx = GPIOA;
+
+    SPIPins.GPIO_PinConfig.GPIO_PinMode = GPIO_MODE_ALTFN;
+    SPIPins.GPIO_PinConfig.GPIO_PinAltFunMode = 5; // AF5 for SPI1
+    SPIPins.GPIO_PinConfig.GPIO_PinOPType = GPIO_OP_TYPE_PP;
+    SPIPins.GPIO_PinConfig.GPIO_PinPuPdControl = GPIO_NO_PUPD;
+    SPIPins.GPIO_PinConfig.GPIO_PinSpeed = GPIO_SPEED_FAST;
+
+    // SCK
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_5;
+    GPIO_Init(&SPIPins);
+
+    // MISO
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_6;
+    GPIO_Init(&SPIPins);
+
+    // MOSI
+    SPIPins.GPIO_PinConfig.GPIO_PinNumber = GPIO_PIN_NO_7;
+    GPIO_Init(&SPIPins);
+}
+
+void SPI1_Inits(void)
+{
+    SPI_Handle_t SPI1Handle;
+
+    SPI1Handle.pSPIx = SPI1;
+
+    SPI1Handle.SPIConfig.SPI_DeviceMode = SPI_DEVICE_MODE_MASTER;
+    SPI1Handle.SPIConfig.SPI_BusConfig = SPI_BUS_CONFIG_FD;
+    SPI1Handle.SPIConfig.SPI_SclkSpeed = SPI_SCLK_SPEED_DIV8;
+    SPI1Handle.SPIConfig.SPI_DFF = SPI_DFF_8BITS;
+    SPI1Handle.SPIConfig.SPI_CPOL = SPI_CPOL_LOW;
+    SPI1Handle.SPIConfig.SPI_CPHA = SPI_CPHA_LOW;
+    SPI1Handle.SPIConfig.SPI_SSM = SPI_SSM_EN;   // software slave management
+
+    SPI_Init(&SPI1Handle);
+}
+
+#include <string.h>
+#include "stm32f407xx.h"
+
+#include <string.h>
+#include "stm32f407xx.h"
+
+int main(void)
+{
+    uint8_t txData[] = "HELLO SPI";
+    uint8_t rxData[sizeof(txData)];
+
+    SPI1_GPIOInits();
+    SPI1_Inits();
+
+    SPI_SSIConfig(SPI1, ENABLE);
+    SPI_PeripheralControl(SPI1, ENABLE);
+
+    uint32_t len = strlen((char*)txData);
+
+    // 🔥 LOOPBACK FULL DUPLEX USING DUMMY WRITE
+       for(uint32_t i = 0; i < len; i++)
+       {
+           // wait TXE
+           while(SPI_GetFlagStatus(SPI1, SPI_TXE_FLAG) == FLAG_RESET);
+
+           // send actual data
+           SPI1->DR = txData[i];
+
+           // wait RXNE
+           while(SPI_GetFlagStatus(SPI1, SPI_RXNE_FLAG) == FLAG_RESET);
+
+           // read received data
+           rxData[i] = SPI1->DR;
+       }
+
+    // Optional: null terminate
+    rxData[len] = '\0';
+
+    while(1);
+}
+
+
